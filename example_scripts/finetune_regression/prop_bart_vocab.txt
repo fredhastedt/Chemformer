@@ -220,10 +220,10 @@ Clint_no_change
 <Lipo>
 <ESOL>
 <FreeS>
-<UNUSED_150>
-<UNUSED_151>
-<UNUSED_152>
-<UNUSED_153>
+[Eu-]
+[Tm]
+[Pm]
+<pri>
 <UNUSED_154>
 <UNUSED_155>
 <UNUSED_156>

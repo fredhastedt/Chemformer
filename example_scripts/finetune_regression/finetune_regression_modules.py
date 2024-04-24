@@ -485,7 +485,7 @@ class FineTuneTransformerModel(pl.LightningModule):
         self.train()
         model_output = self.forward(batch)
         loss = self.loss_fn(batch["target"], model_output) #loss_fct(logits.view(-1), labels.view(-1))
-        self.log("train_loss", loss, on_step=True, logger=True)#, prog_bar=True
+        self.log("train_loss", loss, on_step=True, logger=True, prog_bar=True)#, prog_bar=True
 
         return loss
     
@@ -643,6 +643,8 @@ class EncoderOfBARTModel(_AbsTransformerModel):
         self.token_fc = nn.Linear(d_model, vocab_size)
         self.loss_fn = nn.CrossEntropyLoss(reduction="none", ignore_index=pad_token_idx)
         self.log_softmax = nn.LogSoftmax(dim=2)
+        self.dropout = nn.Dropout(dropout)
+        self.max_seq_len = max_seq_len
 
         self._init_params()
 
@@ -948,4 +950,18 @@ class EncoderOfBARTModel(_AbsTransformerModel):
         }
         model_output = self.decode(decode_input)
         return model_output
+    
+    def _positional_embs(self):
+        """ Produces a tensor of positional embeddings for the model
+
+        Returns a tensor of shape (self.max_seq_len, self.d_model) filled with positional embeddings,
+        which are created from sine and cosine waves of varying wavelength
+        """
+
+        encs = torch.tensor([dim / self.d_model for dim in range(0, self.d_model, 2)])
+        encs = 10000 ** encs
+        encs = [(torch.sin(pos / encs), torch.cos(pos / encs)) for pos in range(self.max_seq_len)]
+        encs = [torch.stack(enc, dim=1).flatten()[:self.d_model] for enc in encs]
+        encs = torch.stack(encs)
+        return encs
     

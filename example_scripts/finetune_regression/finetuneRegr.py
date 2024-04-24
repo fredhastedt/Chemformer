@@ -5,21 +5,21 @@ import pandas as pd
 import itertools
 import torch
 from pytorch_lightning import Trainer 
-from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
 import molbart.util as util
 from molbart.decoder import DecodeSampler 
 
-from finetune_regression_modules import RegPropDataset, RegPropDataModule, FineTuneTransformerModel, EncoderOfBARTModel
+from .finetune_regression_modules import RegPropDataset, RegPropDataModule, FineTuneTransformerModel, EncoderOfBARTModel
 
 
 
 # Default args
-DEFAULT_data_path = 'all_TrainTestVal_pXC50.csv'
-DEFAULT_vocab_path = "prop_bart_vocab.txt"
-DEFAULT_study_name = "TL_Regr_pXC50_" + str(datetime.datetime.now())
-DEFAULT_model_path = "pt_zinc_bart.ckpt"
+DEFAULT_data_path = 'data/chemformer_data.csv'
+DEFAULT_vocab_path = "example_scripts/finetune_regression/prop_bart_vocab.txt"
+DEFAULT_study_name = "TL_Regr_Price" + str(datetime.datetime.now())
+DEFAULT_model_path = "price/bart_combined.ckpt"
 DEFAULT_genes_path = "/individual_files"
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_ACC_BATCHES = 1
@@ -33,7 +33,7 @@ DEFAULT_LIMIT_VAL_BATCHES = 1.0
 DEFAULT_EPOCHS = 150 
 DEFAULT_GPUS = 1
 DEFAULT_D_PREMODEL = 512
-DEFAULT_MAX_SEQ_LEN = 300
+DEFAULT_MAX_SEQ_LEN = 700
 DEFAULT_LR = 3e-4
 DEFAULT_H_FEEDFORWARD = 2048
 DEFAULT_drp = 0.2 
@@ -61,6 +61,9 @@ def load_model(args, vocab_size, total_steps, pad_token_idx, tokeniser):
     premodel.token_fc = torch.nn.Identity()
     premodel.loss_fn = torch.nn.Identity()
     premodel.log_softmax = torch.nn.Identity()
+    del premodel.pos_emb
+    premodel.max_seq_len = args.max_seq_len
+    premodel.register_buffer("pos_emb", premodel._positional_embs())
     
     model = FineTuneTransformerModel(
         d_premodel=args.d_premodel,
@@ -87,7 +90,8 @@ def build_trainer(args):
     gpus = args.gpus
     precision = 32 # 16
 
-    logger = TensorBoardLogger("tb_logs", name=args.study_name)
+    logger = WandbLogger(name="Chemformer", project='graphfg', log_model="all")
+    # logger = TensorBoardLogger("tb_logs", name=args.study_name)
     lr_monitor = LearningRateMonitor(logging_interval="step")
     checkpoint_cb = ModelCheckpoint(monitor="val_loss", save_last=True, mode='min')
 
@@ -100,8 +104,6 @@ def build_trainer(args):
         accumulate_grad_batches=args.acc_batches,
         gradient_clip_val=args.clip_grad,
         callbacks=[lr_monitor, checkpoint_cb],
-        progress_bar_refresh_rate=0,
-        limit_val_batches=4
     )
 
     return trainer
@@ -146,45 +148,45 @@ def results_133QSAR(args, tokeniser, model):
     RMSEs = []
     R2s = []
 
-    dff = pd.read_csv(args.data_path)
-    gene_symbols = list(dff.Gene_Symbol.unique())
+    # dff = pd.read_csv(args.data_path)
+    # gene_symbols = list(dff.Gene_Symbol.unique())
 
-    for gene in gene_symbols:
-        g_path =  f'{args.genes_path}/{gene}.csv'
-        dataset1 = RegPropDataset(data_path=g_path)
-         
-        dm1 = RegPropDataModule(
-            dataset1,
-            tokeniser,
-            int(args.batch_size*2),
-            args.max_seq_len,
-            forward_pred=True,
-            augment=args.augment,
-            val_idxs=dataset1.val_idxs,
-            test_idxs=dataset1.test_idxs
-        )
-        dm1.setup()
+    # for gene in gene_symbols:
+    #     g_path =  f'{args.genes_path}/{gene}.csv'
+    dataset1 = RegPropDataset(data_path=args.data_path)
+        
+    dm1 = RegPropDataModule(
+        dataset1,
+        tokeniser,
+        int(args.batch_size*2),
+        args.max_seq_len,
+        forward_pred=True,
+        augment=args.augment,
+        val_idxs=dataset1.val_idxs,
+        test_idxs=dataset1.test_idxs
+    )
+    dm1.setup()
 
-        pred_train, y_train = get_targs_preds(model=model, dl=dm1.train_dataloader())
-        R2_train = np.power(np.corrcoef(pred_train,y_train)[0,1], 2) 
-        RMSE_train = np.sqrt(np.mean((np.array(pred_train) - np.array(y_train))**2))
-        R2s_train.append(R2_train)
-        RMSEs_train.append(RMSE_train)
+    pred_train, y_train = get_targs_preds(model=model, dl=dm1.train_dataloader())
+    R2_train = np.power(np.corrcoef(pred_train,y_train)[0,1], 2) 
+    RMSE_train = np.sqrt(np.mean((np.array(pred_train) - np.array(y_train))**2))
+    R2s_train.append(R2_train)
+    RMSEs_train.append(RMSE_train)
 
-        pred_test, y_test = get_targs_preds(model=model, dl=dm1.test_dataloader())
-        R2_test = np.power(np.corrcoef(pred_test,y_test)[0,1], 2) 
-        RMSE_test = np.sqrt(np.mean((np.array(pred_test) - np.array(y_test))**2))
-        R2s.append(R2_test)
-        RMSEs.append(RMSE_test)
+    pred_test, y_test = get_targs_preds(model=model, dl=dm1.test_dataloader())
+    R2_test = np.power(np.corrcoef(pred_test,y_test)[0,1], 2) 
+    RMSE_test = np.sqrt(np.mean((np.array(pred_test) - np.array(y_test))**2))
+    R2s.append(R2_test)
+    RMSEs.append(RMSE_test)
         
     results = pd.DataFrame(
-        {'Gene_Symbol':gene_symbols,
+        {
         'RMSE_train':RMSEs_train,
         'R2_train':R2s_train,
         'RMSE_test':RMSEs,
         'R2_test':R2s})
         
-    save_path='results_ZINC_TL_EncRegr133_pXC50.csv'
+    save_path='results_price_pred.csv'
     results.to_csv(save_path, index=False)
     
 
